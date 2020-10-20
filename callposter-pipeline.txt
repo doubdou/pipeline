@@ -1,0 +1,29 @@
+
+sh make 报错 ：
+/bin/sh: go: 未找到命令
+
+原因和解决办法：
+go不在系统bin目录下，加一个软连接使sh命令可以索引到go命令
+ln -sf /usr/local/go/bin/go /bin/go
+============================================================================
+
+pipeline{
+    agent {label "fs-server137"}
+    stages{
+        stage('检出代码') {
+            steps{
+                dir('.'){
+                    git credentialsId: '60d3e041-d2bc-4ac4-b25b-44b979b71f6d', url: 'https://zhuwei.jin@gitserver:8443/r/callposter.git'
+                }
+            }
+                
+        }
+        stage('编译') {
+            steps{
+                dir('./main') {
+                    sh 'make'
+                }
+            }
+        }
+    }
+}

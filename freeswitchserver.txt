@@ -1,0 +1,79 @@
+pipeline{
+    agent none
+    stages{
+        stage('检出代码') {
+            agent { label "fs-server137" }
+            steps{
+                dir('.'){
+                    git credentialsId: '60d3e041-d2bc-4ac4-b25b-44b979b71f6d', url: 'https://zhuwei.jin@gitserver:8443/r/freeswitchserver.git'
+                }
+            }
+                
+        }
+        stage('核心编译') {
+            agent { label "fs-server137" }
+            steps{
+                dir('.') {
+                    echo '核心编译'
+                }
+            }
+        }
+       stage('自定义编译') {
+           agent { label "fs-server137" }
+            steps{
+                dir('./mods/mod_asr') {
+                    echo 'asr模块编译'
+                    sh 'make -f Makefile_mg_duivad'
+                }
+                dir('./mods/mod_tts_async') {
+                    echo 'tts模块编译'
+                    sh 'make'
+                }
+                dir('./mods/mod_cti') {
+                    echo 'cti模块编译'
+                    sh 'make'
+                }
+            }
+        }
+        stage('镜像构建') {
+            agent { label "fs-server137" }
+            steps{
+                dir('.') {
+                    echo '镜像构建并 推送harbor'
+                }
+            }
+        }
+		stage('检出配置') {
+            agent { label "fs-server137" }
+            steps{
+                dir('.') {
+                    echo '目标节点检出配置'
+                }
+            }
+        }
+		stage('部署环境') {
+            agent { label "fs-server137" }
+            steps{
+                dir('.') {
+                    echo '部署环境'
+                }
+            }
+        }
+		stage('测试') {
+            agent { label "fs-server137" }
+            steps{
+                dir('.') {
+                    echo '测试'
+                }
+            }
+        }
+		stage('验收') {
+            agent { label "fs-server137" }
+            steps{
+                dir('.') {
+                    echo '验收并打包'
+                }
+            }
+        }
+    }
+}
