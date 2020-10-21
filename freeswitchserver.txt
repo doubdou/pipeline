@@ -1,3 +1,17 @@
+
+
+编译mod_asr模块报错，缺<uuid/uuid.h>头文件，实际上是缺少依赖库
+解决办法：
+yum -y install libuuid-devel
+
+
+下一步操作，判断：
+1. 代码检出有更新，编译，打镜像
+2. 代码检出未更新，不打镜像
+=======================
+
+
+
 pipeline{
     agent none
     stages{
@@ -38,12 +52,34 @@ pipeline{
         stage('镜像构建') {
             agent { label "fs-server137" }
             steps{
-                dir('.') {
-                    echo '镜像构建并 推送harbor'
+                dir('./docker') {
+                    echo '更新freeswitch.tar.gz文件'
+                    sh 'tar zxvf freeswitch.tar.gz'
+                    sh '/bin/cp -rf ../mods/mod_asr/mod_asr.so freeswitch/lib/freeswitch/mod'
+                    sh '/bin/cp -rf ../mods/mod_tts_async/mod_tts.so freeswitch/lib/freeswitch/mod'
+                    sh '/bin/cp -rf ../mods/mod_cti/mod_cti.so freeswitch/lib/freeswitch/mod'
+                    sh 'tar zcvf freeswitch.tar.gz freeswitch'
                 }
+                script{
+                    git_tag = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
+                    build_tag = "${git_tag}BN$BUILD_NUMBER"
+                    docker_img_name= "harbor.cbz.com/aispeech/fs"
+                }
+                dir('./docker') {
+                    echo 'build镜像文件'
+                    sh "docker build -f Dockerfile -t $docker_img_name:$build_tag ."
+                    sh "docker tag $docker_img_name:$build_tag $docker_img_name:latest"
+                }  
             }
         }
-		stage('检出配置') {
+        stage('镜像推送'){
+            agent { label "fs-server137" }
+            steps{
+                sh "docker push ${docker_img_name}:latest"
+                sh "docker push ${docker_img_name}:${build_tag}"
+            }        
+        }
+        stage('检出配置') {
             agent { label "fs-server137" }
             steps{
                 dir('.') {
@@ -51,7 +87,7 @@ pipeline{
                 }
             }
         }
-		stage('部署环境') {
+        stage('部署环境') {
             agent { label "fs-server137" }
             steps{
                 dir('.') {
@@ -59,7 +95,7 @@ pipeline{
                 }
             }
         }
-		stage('测试') {
+        stage('测试') {
             agent { label "fs-server137" }
             steps{
                 dir('.') {
@@ -67,7 +103,7 @@ pipeline{
                 }
             }
         }
-		stage('验收') {
+        stage('验收') {
             agent { label "fs-server137" }
             steps{
                 dir('.') {
