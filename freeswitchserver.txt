@@ -1,113 +1,100 @@
-
-
-编译mod_asr模块报错，缺<uuid/uuid.h>头文件，实际上是缺少依赖库
-解决办法：
-yum -y install libuuid-devel
-
-
-下一步操作，判断：
-1. 代码检出有更新，编译，打镜像
-2. 代码检出未更新，不打镜像
-=======================
-
-
-
 pipeline{
-    agent none
+    agent { label 'master'}
     stages{
         stage('检出代码') {
-            agent { label "fs-server137" }
             steps{
                 dir('.'){
-                    git credentialsId: '60d3e041-d2bc-4ac4-b25b-44b979b71f6d', url: 'https://zhuwei.jin@gitserver:8443/r/freeswitchserver.git'
+                    git branch: "$git_branch", credentialsId: '3e1ee5a8-7d6c-4f8b-b9e7-3c16b7a64913', url: 'https://zhuwei.jin@172.16.2.15:8443/r/freeswitchserver.git'
                 }
+                addHtmlBadge html: "<div style='text-align:left;word-wrap:break-word;'>branch: <span style='font-weight:bold;background-color:yellow'>${git_branch}</span><br/>node：<span style='font-weight:bold;background-color:yellow'>${deploy_node}</span></div>"
             }
                 
         }
-        stage('核心编译') {
-            agent { label "fs-server137" }
-            steps{
-                dir('.') {
-                    echo '核心编译'
-                }
-            }
-        }
        stage('自定义编译') {
-           agent { label "fs-server137" }
             steps{
+                sh '''#!/bin/bash
+                    ##fs模块编译依赖
+                    if [ ! -d /opt/freeswitch ];then
+                        wget http://172.16.116.203:88/conf/freeswitch.tar.gz -O /opt/freeswitch.tar.gz
+                        tar -zxf /opt/freeswitch.tar.gz -C /opt
+                    fi
+                    
+                    ##uuid依赖
+                    if [ `rpm -qa|grep uuid|wc -l` -lt 2 ];then
+                        yum -y install uuid uuid-devel libuuid libuuid-devel
+                    fi
+                '''
+                dir('./docker') {
+                    echo '下载&解压模块编译所需freeswitch.tar.gz文件'
+                    sh '''#!/bin/bash
+                        rm -f freeswitch.tar.gz 
+                        
+                        ##避免冲突，dockerfile里会将修改的freeswitch压缩成freeswitch.tar.gz
+                        wget http://172.16.116.203:88/conf/freeswitch.tar.gz -O fs.tgz
+                        tar zxvf fs.tgz
+                    '''
+                }
                 dir('./mods/mod_asr') {
                     echo 'asr模块编译'
-                    sh 'make -f Makefile_mg_duivad'
+                    sh 'make clean && make && make install'
                 }
                 dir('./mods/mod_tts_async') {
                     echo 'tts模块编译'
-                    sh 'make'
+                    sh 'make clean && make && make install'
                 }
                 dir('./mods/mod_cti') {
                     echo 'cti模块编译'
-                    sh 'make'
+                    sh 'make clean && make && make install'
+                }
+                dir('./mods/mod_da') {
+                    echo 'da模块编译'
+                    sh 'make clean && make && make install'
                 }
             }
         }
         stage('镜像构建') {
-            agent { label "fs-server137" }
             steps{
                 dir('./docker') {
-                    echo '更新freeswitch.tar.gz文件'
-                    sh 'tar zxvf freeswitch.tar.gz'
-                    sh '/bin/cp -rf ../mods/mod_asr/mod_asr.so freeswitch/lib/freeswitch/mod'
-                    sh '/bin/cp -rf ../mods/mod_tts_async/mod_tts.so freeswitch/lib/freeswitch/mod'
-                    sh '/bin/cp -rf ../mods/mod_cti/mod_cti.so freeswitch/lib/freeswitch/mod'
-                    sh 'tar zcvf freeswitch.tar.gz freeswitch'
+                    echo "打包freeswitch.tar.gz"
+                    sh "tar zcvf freeswitch.tar.gz freeswitch"
                 }
                 script{
                     git_tag = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
-                    build_tag = "${git_tag}BN$BUILD_NUMBER"
+                    date = sh(returnStdout: true, script: 'date +%Y%m%d').trim()
+                    build_tag = "${date}-${git_tag}-BN$BUILD_NUMBER"
                     docker_img_name= "harbor.cbz.com/aispeech/fs"
+                    loc = "/data/jenkins_packages/private-${JOB_NAME}/freeswitch-${date}-${git_tag}-BN${BUILD_NUMBER}"
                 }
                 dir('./docker') {
-                    echo 'build镜像文件'
-                    sh "docker build -f Dockerfile -t $docker_img_name:$build_tag ."
-                    sh "docker tag $docker_img_name:$build_tag $docker_img_name:latest"
-                }  
-            }
-        }
-        stage('镜像推送'){
-            agent { label "fs-server137" }
-            steps{
-                sh "docker push ${docker_img_name}:latest"
-                sh "docker push ${docker_img_name}:${build_tag}"
-            }        
-        }
-        stage('检出配置') {
-            agent { label "fs-server137" }
-            steps{
-                dir('.') {
-                    echo '目标节点检出配置'
+                    echo "部署文件打包"
+                    sh """#!/bin/bash
+                        docker build -f Dockerfile -t $docker_img_name:$build_tag .
+                    
+                        rm -rf ${loc} && mkdir -p ${loc}
+                      
+                        ##拷贝package目录文件
+                        cp -rp ../package/* ${loc}/
+                        docker save ${docker_img_name}:${build_tag} -o ${loc}/image/freeswitch-`date +%Y%m%d`-${git_tag}-BN${BUILD_NUMBER}.tar
+                        
+                        ##打包最终部署文件
+                        tar -zcvf /data/jenkins_packages/private-${JOB_NAME}/freeswitch-`date +%Y%m%d`-${git_tag}-BN${BUILD_NUMBER}.tgz -C /data/jenkins_packages/private-${JOB_NAME} freeswitch-`date +%Y%m%d`-${git_tag}-BN${BUILD_NUMBER}
+                        rm -rf $loc
+                    """
                 }
             }
         }
         stage('部署环境') {
-            agent { label "fs-server137" }
+            agent { label "$deploy_node" }
             steps{
-                dir('.') {
-                    echo '部署环境'
-                }
-            }
-        }
-        stage('测试') {
-            agent { label "fs-server137" }
-            steps{
-                dir('.') {
-                    echo '测试'
-                }
-            }
-        }
-        stage('验收') {
-            agent { label "fs-server137" }
-            steps{
-                dir('.') {
-                    echo '验收并打包'
+                echo '私有化环境开始部署'
+                dir("/data/ansible") {
+                    sh """#!/bin/bash -x
+                        if [ $deploy_node == "private_machine_172.16.116.202" ];then
+                            ansible-playbook -i host  freeswitch.yml  -e '{"download_host":"http://172.16.116.203:88","loc":"private-'${JOB_NAME}'","project":"freeswitch-'${date}'-'${git_tag}'-BN'${BUILD_NUMBER}'.tgz","fs_img":"harbor.cbz.com/aispeech/fs:'${date}'-'${git_tag}'-BN'$BUILD_NUMBER'","deploy_type":"jenkins"}'
+                        else
+                            ansible-playbook -i host  freeswitch.yml  -e '{"download_host":"http://58.211.116.234:88","loc":"private-'${JOB_NAME}'","project":"freeswitch-'${date}'-'${git_tag}'-BN'${BUILD_NUMBER}'.tgz","fs_img":"harbor.cbz.com/aispeech/fs:'${date}'-'${git_tag}'-BN'$BUILD_NUMBER'","deploy_type":"jenkins"}'
+                        fi
+                   """
                 }
             }
         }
